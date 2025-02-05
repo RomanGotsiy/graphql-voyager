@@ -9,85 +9,107 @@ import {
   isUnionType,
 } from 'graphql/type';
 
+type Mapper<T, R> = (id: string, item: T) => R | null;
+type Payload<T, R> = {
+  items: T[];
+  mapper: Mapper<T, R>;
+  idParts: string[];
+};
+
+const SEPARATOR = "::";
+
+function joinParts(parts: string[]) {
+  return parts.join(SEPARATOR);
+}
+
+export function typeNameToId(name: string) {
+  return joinParts(["TYPE", name]);
+}
+
 export function typeObjToId(type: GraphQLNamedType) {
   return typeNameToId(type.name);
 }
 
-export function typeNameToId(name: string) {
-  return `TYPE::${name}`;
+export function extractTypeName(typeID: string): string {
+  const [, type] = typeID.split(SEPARATOR);
+
+  return type;
 }
 
-export function extractTypeName(typeID: string): string {
-  const [, type] = typeID.split('::');
-  return type;
+function getDerivedTypes(schema: GraphQLSchema, type: GraphQLNamedType) {
+  const { interfaces, objects } = schema.getImplementations(type);
+
+  return [...interfaces, ...objects];
+};
+
+function mapItems<T extends { name: string }, R>({
+  items,
+  mapper,
+  idParts,
+}: Payload<T, R>) {
+  return items.reduce((results: R[], item) => {
+    const id = joinParts([...idParts, item.name]);
+    const result = mapper(id, item);
+
+    if (result != null) results.push(result);
+
+    return results;
+  }, []);
 }
 
 export function mapFields<R>(
   type: GraphQLNamedType,
-  fn: (id: string, field: GraphQLField<any, any>) => R | null,
-): Array<R> {
-  const array = [];
-  if (isInterfaceType(type) || isObjectType(type)) {
-    for (const field of Object.values(type.getFields())) {
-      const id = `FIELD::${type.name}::${field.name}`;
-      const result = fn(id, field);
-      if (result != null) {
-        array.push(result);
-      }
-    }
-  }
-  return array;
+  mapper: Mapper<GraphQLField<any, any>, R>
+) {
+  const isValidType = isInterfaceType(type) || isObjectType(type);
+
+  if (!isValidType) return [];
+
+  return mapItems({
+    items: Object.values(type.getFields()),
+    mapper,
+    idParts: ["FIELD", type.name],
+  });
 }
 
 export function mapPossibleTypes<R>(
   type: GraphQLNamedType,
-  fn: (id: string, type: GraphQLObjectType) => R | null,
-): Array<R> {
-  const array = [];
-  if (isUnionType(type)) {
-    for (const possibleType of type.getTypes()) {
-      const id = `POSSIBLE_TYPE::${type.name}::${possibleType.name}`;
-      const result = fn(id, possibleType);
-      if (result != null) {
-        array.push(result);
-      }
-    }
-  }
-  return array;
+  mapper: Mapper<GraphQLObjectType, R>
+) {
+  if (!isUnionType(type)) return [];
+
+  return mapItems({
+    items: type.getTypes(),
+    mapper,
+    idParts: ["POSSIBLE_TYPE", type.name],
+  });
 }
 
 export function mapDerivedTypes<R>(
   schema: GraphQLSchema,
   type: GraphQLNamedType,
-  fn: (id: string, type: GraphQLObjectType | GraphQLInterfaceType) => R | null,
-): Array<R> {
-  const array = [];
-  if (isInterfaceType(type)) {
-    const { interfaces, objects } = schema.getImplementations(type);
-    for (const derivedType of [...interfaces, ...objects]) {
-      const id = `DERIVED_TYPE::${type.name}::${derivedType.name}`;
-      const result = fn(id, derivedType);
-      if (result != null) {
-        array.push(result);
-      }
-    }
-  }
-  return array;
+  mapper: Mapper<GraphQLObjectType | GraphQLInterfaceType, R>
+) {
+  if (!isInterfaceType(type)) return [];
+
+  return mapItems({
+    items: getDerivedTypes(schema, type),
+    mapper,
+    idParts: ["DERIVED_TYPE", type.name],
+  });
 }
 
 export function mapInterfaces<R>(
   type: GraphQLNamedType,
-  fn: (id: string, type: GraphQLInterfaceType) => R | null,
-): Array<R> {
-  const array = [];
-  if (isInterfaceType(type) || isObjectType(type)) {
-    for (const baseType of type.getInterfaces()) {
-      const id = `INTERFACE::${type.name}::${baseType.name}`;
-      const result = fn(id, baseType);
-      if (result != null) {
-        array.push(result);
-      }
-    }
-  }
-  return array;
+  mapper: Mapper<GraphQLNamedType, R>
+) {
+  const isValidType = isInterfaceType(type) || isObjectType(type);
+
+  if (!isValidType) return [];
+
+  return mapItems({
+    items: type.getInterfaces(),
+    mapper,
+    idParts: ["INTERFACE", type.name],
+  });
 }
